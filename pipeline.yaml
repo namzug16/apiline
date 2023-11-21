@@ -1,9 +1,16 @@
 description: "Supply creation on a Space"
 baseURL: "http://localhost:8080/api"
 actions:
-  - endpoint: "spaces"
+  - endpoint: "space"
+    method: "POST"
+    statusCode: 201
+    body:
+      space_name: "TEST SPACE"
+      role: 0
     setters:
-      spaces/[0]/id: "space_id"
+      space_id: "space_id"
+    logRequestBody: true
+    logResponseBody: true
   - endpoint: "space/@{space_id}/measure_unit"
     method: "POST"
     statusCode: 201
@@ -28,4 +35,6 @@ actions:
       price: 3.34
     logRequestBody: true
     logResponseBody: true
+  - endpoint: "space/@{space_id}"
+    method: "DELETE"
 

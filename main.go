@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -26,6 +27,7 @@ type Action struct {
 	StatusCode      *int               `yaml:"statusCode"`
 	Body            *map[string]any    `yaml:"body"`
 	Setters         *map[string]string `yaml:"setters"`
+	Assertions      *map[string]any    `yaml:"assertions"`
 	Description     *string            `yaml:"description"`
 	LogResponseBody *bool              `yaml:"logResponseBody"`
 	LogRequestBody  *bool              `yaml:"logRequestBody"`
@@ -33,6 +35,105 @@ type Action struct {
 }
 
 func main() {
+	files := filesToExecute()
+
+	logger := NewLogger()
+
+	logger.magenta("Apiline")
+	logger.green("=================================>")
+
+	logger.blue("Files to execute: ", files)
+
+	for _, file := range files {
+		logger.green()
+		logger.green()
+		logger.blue("FILE: ", file)
+		err := RunPipeline(logger, file)
+		if err != nil {
+			logger.red("Error running pipeline")
+			logger.red(err)
+			break
+		}
+	}
+
+	logger.green()
+}
+
+func filesToExecute() []string {
+
+	files := make([]string, 0)
+
+	if len(os.Args) < 2 {
+		fmt.Println("Usage: apiline <file|directory> or file1.yaml file2.yaml")
+		os.Exit(1)
+	}
+
+	arg := os.Args[1]
+	if arg == "." {
+		files = append(files, filesOfCurrentDirectory()...)
+	} else {
+		files = append(files, filesFromArgs(os.Args[1:])...)
+	}
+
+	return files
+}
+
+func isYamlFile(path string) bool {
+	return strings.HasSuffix(path, ".yaml") || strings.HasSuffix(path, ".yml")
+}
+
+func filesOfCurrentDirectory() []string {
+	files := make([]string, 0)
+
+	filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			fmt.Printf("Error accessing path %s: %v\n", path, err)
+		}
+		if !info.IsDir() {
+			if isYamlFile(path) {
+				files = append(files, path)
+			}
+		}
+		return nil
+	})
+
+	return files
+}
+
+func filesFromArgs(args []string) []string {
+	files := make([]string, 0)
+
+	for _, arg := range args {
+		fileInfo, err := os.Stat(arg)
+		if err != nil {
+			fmt.Printf("Error accessing file %s: %v\n", arg, err)
+			continue
+		}
+		if fileInfo.IsDir() {
+			filepath.Walk(arg, func(path string, info os.FileInfo, err error) error {
+				if err != nil {
+					fmt.Printf("Error accessing path %s: %v\n", path, err)
+					return err
+				}
+				if !info.IsDir() {
+					if isYamlFile(path) {
+						files = append(files, path)
+					}
+				}
+				return nil
+			})
+		} else {
+			if isYamlFile(arg) {
+				files = append(files, arg)
+			}
+		}
+	}
+
+	return files
+}
+
+func RunPipeline(logger *Logger, file string) error {
+
 	data, err := os.ReadFile("pipeline.yaml")
 
 	if err != nil {
@@ -47,10 +148,6 @@ func main() {
 		panic(err)
 	}
 
-	logger := NewLogger()
-
-	logger.green("Apiline")
-	logger.green("=================================")
 	logger.magenta(pipeline.Description)
 	logger.green()
 	logger = logger.withPrefix(Green + "|| " + Reset)
@@ -109,14 +206,14 @@ func main() {
 
 		if err != nil {
 			logger.red("Error creating request: ", err)
-			os.Exit(1)
+			return err
 		}
 
 		resp, err := client.Do(req)
 
 		if err != nil {
 			logger.red("Error sending request: ", err)
-			os.Exit(1)
+			return err
 		}
 
 		defer resp.Body.Close()
@@ -130,7 +227,7 @@ func main() {
 
 			if err != nil {
 				logger.red("Error reading response body: ", err)
-				os.Exit(1)
+				return err
 			}
 
 			if len(body) == 0 {
@@ -143,29 +240,55 @@ func main() {
 
 			if err := json.Unmarshal(body, &responseBody); err != nil {
 				logger.red("Error unmarshaling response: ", err)
-				os.Exit(1)
+				return err
 			}
 
 			logger.red("Response:")
 			logger.red(responseBody)
-			os.Exit(1)
+			return err
+		}
+
+		responseBodyData, err := io.ReadAll(resp.Body)
+
+		var responseBody map[string]any
+
+		if err := json.Unmarshal(responseBodyData, &responseBody); err != nil {
+			logger.red("Error unmarshaling response: ", err)
+			return err
 		}
 
 		logger.green("GOT: ", resp.StatusCode)
+
+		if action.LogResponseBody != nil && *action.LogResponseBody {
+
+			if err != nil {
+				logger.red("Error reading response body: ", err)
+				return err
+			}
+
+			if len(responseBody) == 0 {
+				logger.blue("Response:")
+				logger.blue("Empty")
+				continue
+			}
+
+			logger.blue("Response:")
+			logger.blue(responseBody)
+		}
 
 		if action.Setters != nil {
 			logger.blue("Setting variables")
 
 			for key, value := range *action.Setters {
 
-				data, err := extractDataFromResponse(resp, key)
+				data, err := extractDataFromResponse(responseBody, key)
 
 				if err != nil {
 					logger.red("Error extracting data from response")
 					logger.red(err)
 					logger.red("Key:")
 					logger.red(key)
-					os.Exit(1)
+					return err
 				}
 
 				variables[value] = data
@@ -174,35 +297,60 @@ func main() {
 			}
 		}
 
-		if action.LogResponseBody != nil && *action.LogResponseBody {
-			body, err := io.ReadAll(resp.Body)
+		if action.Assertions != nil {
+			logger.blue("Asserting response")
 
-			if err != nil {
-				logger.red("Error reading response body: ", err)
-				os.Exit(1)
+			for key, value := range *action.Assertions {
+
+				data, err := extractDataFromResponse(responseBody, key)
+
+				if err != nil {
+					logger.red("Error extracting data from response")
+					logger.red(err)
+					logger.red("Key:")
+					logger.red(key)
+					body, err := io.ReadAll(resp.Body)
+
+					if err != nil {
+						logger.red("Error reading response body: ", err)
+						return err
+					}
+
+					if len(body) == 0 {
+						logger.blue("Response:")
+						logger.blue("Empty")
+						continue
+					}
+
+					var responseBody map[string]any
+
+					if err := json.Unmarshal(body, &responseBody); err != nil {
+						logger.red("Error unmarshaling response: ", err)
+						return err
+					}
+
+					logger.blue("Response:")
+					logger.blue(responseBody)
+					return err
+				}
+
+				if data != value {
+					logger.red(key, " != inserted data")
+					logger.red("Expected: ", value)
+					logger.red("Got: ", data)
+					return err
+				}
+
+				logger.green(key, " == inserted data")
+
 			}
 
-			if len(body) == 0 {
-				logger.blue("Response:")
-				logger.blue("Empty")
-				continue
-			}
-
-			var responseBody map[string]any
-
-			if err := json.Unmarshal(body, &responseBody); err != nil {
-				logger.red("Error unmarshaling response: ", err)
-				os.Exit(1)
-			}
-
-			logger.blue("Response:")
-			logger.blue(responseBody)
 		}
 
 		logger.green()
 	}
 
-	logger.green("=================================")
+	return nil
 }
 
 func valueIfNil[T any](target *T, value T) T {
@@ -242,12 +390,7 @@ func replaceVariablesOnString(data any, variables map[string]any) any {
 	}
 }
 
-func extractDataFromResponse(resp *http.Response, path string) (any, error) {
-	var body map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return nil, err
-	}
-
+func extractDataFromResponse(body map[string]any, path string) (any, error) {
 	keys := strings.Split(path, "/")
 	var current any = body
 
