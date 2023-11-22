@@ -12,26 +12,24 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-
-	"gopkg.in/yaml.v2"
 )
 
 type Pipeline struct {
-	Description string   `yaml:"description"`
-	BaseURL     *string  `yaml:"baseURL"`
-	Actions     []Action `yaml:"actions"`
+	Description string   `json:"description"`
+	BaseURL     *string  `json:"baseURL"`
+	Actions     []Action `json:"actions"`
 }
 
 type Action struct {
-	Method          *string            `yaml:"method"`
-	StatusCode      *int               `yaml:"statusCode"`
-	Body            *map[string]any    `yaml:"body"`
-	Setters         *map[string]string `yaml:"setters"`
-	Assertions      *map[string]any    `yaml:"assertions"`
-	Description     *string            `yaml:"description"`
-	LogResponseBody *bool              `yaml:"logResponseBody"`
-	LogRequestBody  *bool              `yaml:"logRequestBody"`
-	Endpoint        string             `yaml:"endpoint"`
+	Method          *string            `json:"method"`
+	StatusCode      *int               `json:"statusCode"`
+	Body            *map[string]any    `json:"body"`
+	Setters         *map[string]string `json:"setters"`
+	Assertions      *map[string]any    `json:"assertions"`
+	Description     *string            `json:"description"`
+	LogResponseBody *bool              `json:"log_response_body"`
+	LogRequestBody  *bool              `json:"log_request_body"`
+	Endpoint        string             `json:"endpoint"`
 }
 
 func main() {
@@ -39,8 +37,17 @@ func main() {
 
 	logger := NewLogger()
 
-	logger.magenta("Apiline")
-	logger.green("=================================>")
+	logger.cyan(
+		`
+     ________      ________    ___      ___           ___      ________       _______      
+    |\   __  \    |\   __  \  |\  \    |\  \         |\  \    |\   ___  \    |\  ___ \     
+    \ \  \|\  \   \ \  \|\  \ \ \  \   \ \  \        \ \  \   \ \  \\ \  \   \ \   __/|    
+     \ \   __  \   \ \   ____\ \ \  \   \ \  \        \ \  \   \ \  \\ \  \   \ \  \_|/__  
+      \ \  \ \  \   \ \  \___|  \ \  \   \ \  \____    \ \  \   \ \  \\ \  \   \ \  \_|\ \ 
+       \ \__\ \__\   \ \__\      \ \__\   \ \_______\   \ \__\   \ \__\\ \__\   \ \_______\
+        \|__|\|__|    \|__|       \|__|    \|_______|    \|__|    \|__| \|__|    \|_______|
+    `,
+	)
 
 	logger.blue("Files to execute: ", files)
 
@@ -54,6 +61,7 @@ func main() {
 			logger.red(err)
 			break
 		}
+		logger = logger.resetPrefix()
 	}
 
 	logger.green()
@@ -78,8 +86,8 @@ func filesToExecute() []string {
 	return files
 }
 
-func isYamlFile(path string) bool {
-	return strings.HasSuffix(path, ".yaml") || strings.HasSuffix(path, ".yml")
+func isJsonFile(path string) bool {
+	return strings.HasSuffix(path, ".json")
 }
 
 func filesOfCurrentDirectory() []string {
@@ -90,7 +98,7 @@ func filesOfCurrentDirectory() []string {
 			fmt.Printf("Error accessing path %s: %v\n", path, err)
 		}
 		if !info.IsDir() {
-			if isYamlFile(path) {
+			if isJsonFile(path) {
 				files = append(files, path)
 			}
 		}
@@ -116,14 +124,14 @@ func filesFromArgs(args []string) []string {
 					return err
 				}
 				if !info.IsDir() {
-					if isYamlFile(path) {
+					if isJsonFile(path) {
 						files = append(files, path)
 					}
 				}
 				return nil
 			})
 		} else {
-			if isYamlFile(arg) {
+			if isJsonFile(arg) {
 				files = append(files, arg)
 			}
 		}
@@ -134,7 +142,7 @@ func filesFromArgs(args []string) []string {
 
 func RunPipeline(logger *Logger, file string) error {
 
-	data, err := os.ReadFile("pipeline.yaml")
+	data, err := os.ReadFile(file)
 
 	if err != nil {
 		panic(err)
@@ -142,7 +150,7 @@ func RunPipeline(logger *Logger, file string) error {
 
 	var pipeline Pipeline
 
-	err = yaml.Unmarshal(data, &pipeline)
+	err = json.Unmarshal(data, &pipeline)
 
 	if err != nil {
 		panic(err)
@@ -177,13 +185,8 @@ func RunPipeline(logger *Logger, file string) error {
 		var body any
 
 		if action.Body != nil {
-			convertedMap := make(map[string]any)
-			for k, v := range *action.Body {
-				convertedMap[k] = v
-			}
-
 			body = replaceVariablesOnMap(
-				convertedMap,
+				*action.Body,
 				variables,
 			)
 		}
@@ -195,6 +198,7 @@ func RunPipeline(logger *Logger, file string) error {
 			logger.red(err)
 			logger.red("Body:")
 			logger.red(body)
+			return err
 		}
 
 		if action.Body != nil && action.LogRequestBody != nil && *action.LogRequestBody {
@@ -300,7 +304,12 @@ func RunPipeline(logger *Logger, file string) error {
 		if action.Assertions != nil {
 			logger.blue("Asserting response")
 
-			for key, value := range *action.Assertions {
+			assertions := replaceVariablesOnMap(
+				*action.Assertions,
+				variables,
+			)
+
+			for key, value := range assertions {
 
 				data, err := extractDataFromResponse(responseBody, key)
 
@@ -309,26 +318,6 @@ func RunPipeline(logger *Logger, file string) error {
 					logger.red(err)
 					logger.red("Key:")
 					logger.red(key)
-					body, err := io.ReadAll(resp.Body)
-
-					if err != nil {
-						logger.red("Error reading response body: ", err)
-						return err
-					}
-
-					if len(body) == 0 {
-						logger.blue("Response:")
-						logger.blue("Empty")
-						continue
-					}
-
-					var responseBody map[string]any
-
-					if err := json.Unmarshal(body, &responseBody); err != nil {
-						logger.red("Error unmarshaling response: ", err)
-						return err
-					}
-
 					logger.blue("Response:")
 					logger.blue(responseBody)
 					return err
@@ -364,10 +353,25 @@ func replaceVariablesOnMap(data, variables map[string]any) map[string]any {
 	parsed := make(map[string]any)
 
 	for key, value := range data {
-		parsed[key] = replaceVariablesOnString(value, variables)
+		parsed[key] = replaceVariablesOnData(value, variables)
 	}
 
 	return parsed
+}
+
+func replaceVariablesOnData(data any, variables map[string]any) any {
+	switch v := data.(type) {
+	case map[string]any:
+		return replaceVariablesOnMap(v, variables)
+	case []any:
+		replacedElements := make([]any, 0)
+		for _, val := range v {
+			replacedElements = append(replacedElements, replaceVariablesOnData(val, variables))
+		}
+		return replacedElements
+	default:
+		return replaceVariablesOnString(v, variables)
+	}
 }
 
 func replaceVariablesOnString(data any, variables map[string]any) any {
@@ -430,7 +434,7 @@ const (
 	Green   = "\033[32m"
 	Blue    = "\033[34m"
 	Magenta = "\033[35m"
-	Bold    = "\033[1m"
+	Cyan    = "\033[36m"
 )
 
 type Logger struct {
@@ -444,6 +448,18 @@ func NewLogger() *Logger {
 func (l *Logger) withPrefix(prefix string) *Logger {
 	l.Prefix = &prefix
 	return l
+}
+
+func (l *Logger) resetPrefix() *Logger {
+	l.Prefix = nil
+	return l
+}
+
+func (l *Logger) cyan(msg ...any) {
+	fmt.Print(valueIfNil(l.Prefix, ""))
+	fmt.Print(Cyan)
+	fmt.Print(msg...)
+	fmt.Println(Reset)
 }
 
 func (l *Logger) green(msg ...any) {

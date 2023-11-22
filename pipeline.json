@@ -1,0 +1,90 @@
+{
+  "description": "Unit Cost creation on a Space",
+  "baseURL": "http://localhost:8080/api",
+  "actions": [
+    {
+      "endpoint": "space",
+      "method": "POST",
+      "statusCode": 201,
+      "body": {
+        "space_name": "TEST SPACE",
+        "role": 0
+      },
+      "setters": {
+        "space_id": "space_id"
+      }
+    },
+    {
+      "endpoint": "space/@{space_id}/measure_unit",
+      "method": "POST",
+      "statusCode": 201,
+      "body": {
+        "description": "METER",
+        "abbreviation": "m",
+        "type": 1,
+        "used_in_unit_cost": true,
+        "used_in_general_expenses": true,
+        "allowed_supply_types": "1"
+      },
+      "setters": {
+        "measure_unit_id": "measure_unit_id"
+      }
+    },
+    {
+      "endpoint": "space/@{space_id}/measure_units",
+      "assertions": {
+        "measure_units/[0]/id": "@{measure_unit_id}"
+      }
+    },
+    {
+      "endpoint": "space/@{space_id}/supply",
+      "method": "POST",
+      "statusCode": 201,
+      "body": {
+        "measure_unit_id": "@{measure_unit_id}",
+        "measure_unit_purchase_id": "@{measure_unit_id}",
+        "supply_type": 0,
+        "description": "SUPPLY A",
+        "specifications": "",
+        "price": 10.0
+      },
+      "setters": {
+        "supply_id": "supply_id"
+      }
+    },
+    {
+      "endpoint": "space/@{space_id}/unit_cost",
+      "method": "POST",
+      "statusCode": 201,
+      "log_request_body": true,
+      "log_response_body": true,
+      "body": {
+        "measure_unit_id": "@{measure_unit_id}",
+        "description": "UNIT COST A",
+        "performance_time_period": 0,
+        "performance": 8.0,
+        "total": 10.0,
+        "supplies": [
+          {
+            "origin_id": "@{supply_id}",
+            "measure_unit_id": "@{measure_unit_id}",
+            "measure_unit_purchase_id": "@{measure_unit_id}",
+            "supply_type": 0,
+            "description": "SUPPLY A",
+            "specifications": "",
+            "price": 10.0,
+            "quantity": 1.0,
+            "resources": 1.0,
+            "waste_percentage": 0.0,
+            "total": 10.0
+          }
+        ]
+      }
+    },
+    {
+      "endpoint": "space/@{space_id}",
+      "method": "DELETE"
+    }
+  ]
+}
+
